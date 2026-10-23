@@ -16,12 +16,18 @@ from aiogram.types import (
     ReplyKeyboardMarkup,
     KeyboardButton,
     ReplyKeyboardRemove,
+    Update,
 )
 
 # ---------- Настройки ----------
-BOT_TOKEN = os.environ["BOT_TOKEN"]          # токен бота от @BotFather
-ADMIN_CHAT_ID = int(os.environ["ADMIN_CHAT_ID"])  # ваш chat_id, куда падают заявки
-PORT = int(os.environ.get("PORT", 10000))    # порт, который Render передаёт автоматически
+BOT_TOKEN = os.environ["BOT_TOKEN"]
+ADMIN_CHAT_ID = int(os.environ["ADMIN_CHAT_ID"])
+PORT = int(os.environ.get("PORT", 10000))
+# Публичный адрес сервиса на Render, например:
+# https://neurointelegence-bot.onrender.com
+BASE_URL = os.environ["BASE_URL"].rstrip("/")
+WEBHOOK_PATH = "/webhook"
+WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "render-webhook")
 
 logging.basicConfig(level=logging.INFO)
 
@@ -211,26 +217,45 @@ async def cancel(message: Message, state: FSMContext):
     await message.answer("Заявка отменена.", reply_markup=ReplyKeyboardRemove())
 
 
-# ---------- Веб-заглушка для Render (free Web Service требует открытый порт) ----------
-async def handle_ping(request):
+# ---------- Webhook ----------
+async def handle_webhook(request: web.Request):
+    # Проверка секрета Telegram (защита от чужих запросов на этот URL)
+    secret = request.headers.get("X-Telegram-Bot-Api-Secret-Token")
+    if secret != WEBHOOK_SECRET:
+        return web.Response(status=403, text="forbidden")
+
+    data = await request.json()
+    update = Update.model_validate(data)
+    await dp.feed_update(bot, update)
+    return web.Response(text="ok")
+
+
+async def handle_ping(request: web.Request):
     return web.Response(text="Bot is running")
 
 
-async def start_web_app():
+async def on_startup(app: web.Application):
+    await bot.set_webhook(
+        url=f"{BASE_URL}{WEBHOOK_PATH}",
+        secret_token=WEBHOOK_SECRET,
+        drop_pending_updates=True,
+    )
+    logging.info("Webhook set to %s%s", BASE_URL, WEBHOOK_PATH)
+
+
+async def on_shutdown(app: web.Application):
+    await bot.delete_webhook()
+    await bot.session.close()
+
+
+def create_app() -> web.Application:
     app = web.Application()
     app.router.add_get("/", handle_ping)
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", PORT)
-    await site.start()
-    logging.info(f"Web server started on port {PORT}")
-
-
-async def main():
-    await start_web_app()
-    await dp.start_polling(bot)
+    app.router.add_post(WEBHOOK_PATH, handle_webhook)
+    app.on_startup.append(on_startup)
+    app.on_shutdown.append(on_shutdown)
+    return app
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
-
+    web.run_app(create_app(), host="0.0.0.0", port=PORT)
