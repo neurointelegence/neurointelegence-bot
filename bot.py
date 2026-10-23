@@ -2,6 +2,7 @@ import asyncio
 import logging
 import os
 
+from aiohttp import web
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.filters import Command, CommandStart, CommandObject
 from aiogram.fsm.context import FSMContext
@@ -20,6 +21,7 @@ from aiogram.types import (
 # ---------- Настройки ----------
 BOT_TOKEN = os.environ["BOT_TOKEN"]          # токен бота от @BotFather
 ADMIN_CHAT_ID = int(os.environ["ADMIN_CHAT_ID"])  # ваш chat_id, куда падают заявки
+PORT = int(os.environ.get("PORT", 10000))    # порт, который Render передаёт автоматически
 
 logging.basicConfig(level=logging.INFO)
 
@@ -106,7 +108,6 @@ def contact_kb() -> ReplyKeyboardMarkup:
 @router.message(CommandStart())
 async def cmd_start(message: Message, state: FSMContext, command: CommandObject):
     await state.clear()
-    # deep-link метка источника, напр. t.me/bot?start=avito или ?start=channel
     source = command.args
     if source:
         await state.update_data(source=source)
@@ -210,9 +211,26 @@ async def cancel(message: Message, state: FSMContext):
     await message.answer("Заявка отменена.", reply_markup=ReplyKeyboardRemove())
 
 
+# ---------- Веб-заглушка для Render (free Web Service требует открытый порт) ----------
+async def handle_ping(request):
+    return web.Response(text="Bot is running")
+
+
+async def start_web_app():
+    app = web.Application()
+    app.router.add_get("/", handle_ping)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", PORT)
+    await site.start()
+    logging.info(f"Web server started on port {PORT}")
+
+
 async def main():
+    await start_web_app()
     await dp.start_polling(bot)
 
 
 if __name__ == "__main__":
     asyncio.run(main())
+
