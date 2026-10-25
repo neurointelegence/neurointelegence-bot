@@ -244,7 +244,10 @@ async def on_startup(app: web.Application):
 
 
 async def on_shutdown(app: web.Application):
-    await bot.delete_webhook()
+    # Важно: НЕ удаляем webhook здесь. Render может "усыплять" сервис при
+    # бездействии и поднимать его заново по входящему запросу — если мы
+    # удаляем webhook при каждом сне, Telegram теряет адрес и сервис
+    # больше никогда не получает новый запрос, чтобы проснуться.
     await bot.session.close()
 
 
